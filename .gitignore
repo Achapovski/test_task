@@ -1,0 +1,19 @@
+# Python-generated files
+.idea
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.env
+.env.local
+config.yml
+config.local.yml
+
+docker-compose.local.yml
+/logs/

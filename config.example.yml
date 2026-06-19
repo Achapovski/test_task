@@ -1,0 +1,33 @@
+DATABASE:
+  DRIVER: "postgresql+asyncpg"
+  HOST: localhost
+  PORT: 5432
+  IS_ECHO: no
+  POOL_SIZE: 10
+  MAX_OVERFLOW: 15
+
+BROKER:
+  HOST: localhost
+  PORT: 5672
+  PROTOCOL: amqp
+
+MESSAGING:
+  PAYMENTS:
+    TOPICS:
+      NEW: payments.new
+      WEBHOOKS: payments.webhooks
+      WEBHOOKS_DEAD: payments.webhooks.dead
+    RETRY_POLICY:
+      FIRST:
+        TIME: 5000
+        RKEY: payments.retry_first
+      SECOND:
+        TIME: 30000
+        RKEY: payments.retry_second
+      THIRD:
+        TIME: 120000
+        RKEY: payments.retry_third
+
+LOGGING:
+  FORMAT: "%(asctime)s %(levelname)s %(message)s"
+  LEVEL: INFO
