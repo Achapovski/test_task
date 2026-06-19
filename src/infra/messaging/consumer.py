@@ -31,7 +31,7 @@ async def process_payment(
     new_status = PaymentStatusEnum.SUCCESS if random.random() < 0.9 else PaymentStatusEnum.FAILED
     await use_case.execute(PaymentUpdateStatusRequestDTO(id=event.id, status=new_status))
 
-    if event.webhook_url and new_status == PaymentStatusEnum.SUCCESS:
+    if event.webhook_url:
         message = PaymentProcessedEvent(status=new_status, **event.as_dict())
         await broker.publish(
             message=message.as_dict(),
