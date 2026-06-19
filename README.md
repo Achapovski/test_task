@@ -31,20 +31,6 @@ Backend-сервис обработки платежей, реализованн
 
 ---
 
-# Архитектура
-
-Проект построен по принципам трехслойной архитектуры:
-
-```
-API Layer
-    ↓
-Application Layer (Use Cases)
-    ↓
-Domain Layer
-    ↓
-Infrastructure Layer
-```
-
 Структура проекта:
 
 ```
