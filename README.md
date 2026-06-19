@@ -145,10 +145,16 @@ Response:
 
 ```json
 {
-  "id": "5bfc4131-5a58-48d0-a0d3-c2bb16b16dd8",
-  "amount": 100.00,
+  "id": "a69b3d0e-365f-475e-a729-3f376dfe4efb",
+  "idempotency_key": "3fa85f64-5717-4562-b3fc-2c963f66afa2",
+  "amount": "1.00",
   "currency": "USD",
-  "status": "SUCCESS"
+  "metadata": null,
+  "description": "string",
+  "status": "SUCCESS",
+  "webhook_url": "https://google.com",
+  "created_at": "2026-06-19T18:15:00.577431Z",
+  "processed_at": null
 }
 ```
 
