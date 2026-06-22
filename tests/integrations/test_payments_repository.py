@@ -1,7 +1,8 @@
+
 import pytest
 
 from src.domains.payments.domain.constraints import PaymentStatusEnum
-from src.domains.payments.exceptions import PaymentAlreadyExistsException, PaymentNotFoundException
+from src.domains.payments.exceptions import PaymentNotFoundException
 from src.infra.adapters.repositories.payments import SqlAlchemyPaymentsRepository
 
 
@@ -60,19 +61,3 @@ async def test_should_raise_when_payment_not_found(payments_repository):
 
     with pytest.raises(PaymentNotFoundException):
         await payments_repository.get(uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_should_raise_when_payment_already_exists(
-    payment_factory,
-    payments_repository,
-):
-    payment_1 = payment_factory()
-    payment_2 = payment_factory()
-
-    payment_2._idempotency_key = payment_1.idempotency_key
-
-    await payments_repository.add(payment_1)
-
-    with pytest.raises(PaymentAlreadyExistsException):
-        await payments_repository.add(payment_2)

@@ -18,7 +18,7 @@ class OutboxWorker:
         async with self._uow as uow:
             try:
                 for msg in await uow.outbox.get_unpublished():
-                    await self._broker.publish(message=msg.body, queue=msg.topic)  # type: ignore
+                    await self._broker.publish(message=msg.body, queue=msg.topic)
                     await uow.outbox.mark_as_published(msg)
             except Exception:
                 logger.exception("Error or publishing event.")

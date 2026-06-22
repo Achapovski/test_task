@@ -93,6 +93,9 @@ alembic upgrade head
 
 # REST API
 
+Бизнес логика проекта вынесена в сценарии использования `/app/use_cases`, которые агрегируют управление сущностями и
+сессией БД.
+
 ## Создание платежа
 
 ### POST /api/v1/payments
@@ -133,7 +136,7 @@ Response:
 
 ## Получение платежа
 
-### GET /api/v1/payments{payment_id}
+### GET /api/v1/payments/{payment_id}
 
 Headers:
 

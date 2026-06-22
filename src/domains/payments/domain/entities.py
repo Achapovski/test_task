@@ -61,7 +61,7 @@ class PaymentEntity(BaseEntity):
             self._status = PaymentStatus(status)
         return None
 
-    def delivered(self) -> None:
+    def process(self) -> None:
         if not self.processed_at:
             self._processed_at = datetime.now(tz=timezone.utc)
 

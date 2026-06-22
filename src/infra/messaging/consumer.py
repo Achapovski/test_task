@@ -8,108 +8,102 @@ from faststream import AckPolicy, Context
 from faststream.rabbit import RabbitBroker, RabbitMessage, RabbitRouter
 
 from src.app.dto.payments import PaymentUpdateStatusRequestDTO
+from src.app.interfaces.units_of_work import ApplicationPaymentUnitOfWork
 from src.app.use_cases.change_payment_status import ChangePaymentStatusUseCase
-from src.app.use_cases.set_payment_delivery import SetPaymentDeliveryUseCase
+from src.app.use_cases.set_payment_processed import SetPaymentProcessedUseCase
 from src.core import settings
 from src.domains.payments.domain.constraints import PaymentStatusEnum
+from src.infra.adapters.brokers.topology import payments_exchange, webhook_queue
 from src.infra.messaging.events.emitted import PaymentCreatedEvent
 from src.infra.messaging.events.emitted.events import PaymentProcessedEvent
-from src.infra.messaging.topology import payments_exchange, retry_exchange, webhook_queue
+from src.infra.outbox.schemes import OutboxMessageScheme
 
 logging.basicConfig(level=settings.LOGGING.LEVEL, format=settings.LOGGING.FORMAT)
 logger = logging.getLogger(__name__)
 router = RabbitRouter()
 
 
+async def emulate_payment_processing() -> bool:
+    delay = random.uniform(2, 5)
+    await asyncio.sleep(delay)
+    return random.random() < 0.9
+
+
 @router.subscriber(queue=settings.MESSAGING.PAYMENTS.TOPICS.NEW, exchange=payments_exchange)
 async def process_payment(
     event: PaymentCreatedEvent,
-    use_case: FromDishka[ChangePaymentStatusUseCase],
-    broker: RabbitBroker = Context(),
+    c_use_case: FromDishka[ChangePaymentStatusUseCase],
+    p_use_case: FromDishka[SetPaymentProcessedUseCase],
+    uow: FromDishka[ApplicationPaymentUnitOfWork],
+    message: RabbitMessage,
 ) -> None:
-    await asyncio.sleep(random.uniform(2, 5))
-    new_status = PaymentStatusEnum.SUCCESS if random.random() < 0.9 else PaymentStatusEnum.FAILED
-    await use_case.execute(PaymentUpdateStatusRequestDTO(id=event.id, status=new_status))
+    payment_id: str = str(event.id)
+    death_header = message.headers.get("x-death")
+    retry_count = 0
 
-    if event.webhook_url:
-        message = PaymentProcessedEvent(status=new_status, **event.as_dict())
-        await broker.publish(
-            message=message.as_dict(),
-            queue=settings.MESSAGING.PAYMENTS.TOPICS.WEBHOOKS,
-            exchange="payments.exchange",
+    if death_header:
+        retry_count = sum(d.get("count", 0) for d in death_header)
+
+    if retry_count >= settings.MESSAGING.MAX_RETRIES:
+        logger.error(
+            "Payment %s exceeded max retries (%d). Dropping to DLQ.",
+            payment_id,
+            settings.MESSAGING.MAX_RETRIES,
         )
+        await message.nack(requeue=False)
+        return
+
+    logger.info("Processing payment %s (retry=%d)", payment_id, retry_count)
+
+    try:
+        success = await emulate_payment_processing()
+        new_status = PaymentStatusEnum.SUCCESS if success else PaymentStatusEnum.FAILED
+        payment = PaymentUpdateStatusRequestDTO(id=event.id, status=new_status)
+        await c_use_case.execute(payment)
+        await p_use_case.execute(event.id)
+        logger.info("Payment %s → %s", payment_id, new_status)
+
+        if event.webhook_url:
+            async with uow as uow:
+                msg = OutboxMessageScheme(
+                    body=PaymentProcessedEvent(status=new_status, **event.as_dict()).as_dict(),
+                    topic=settings.MESSAGING.PAYMENTS.TOPICS.WEBHOOKS,
+                )
+                await uow.outbox.add_msgs(msg)
+                await uow.commit()
+
+    except Exception as exc:
+        logger.exception("Unexpected error processing payment %s: %s", payment_id, exc)
+        backoff = 2 ** (retry_count + 1)
+        logger.info("Will requeue payment %s after %ds", payment_id, backoff)
+        await asyncio.sleep(backoff)
+        await message.nack(requeue=False)
 
 
 @router.subscriber(queue=webhook_queue, exchange=payments_exchange, ack_policy=AckPolicy.MANUAL)
 async def send_webhook_consumer(
-    event: PaymentProcessedEvent,
-    msg: RabbitMessage,
-    http_client: FromDishka[ClientSession],
-    use_case: FromDishka[SetPaymentDeliveryUseCase],
-    broker: RabbitBroker = Context(),
+    event: PaymentProcessedEvent, http_client: FromDishka[ClientSession], message: RabbitMessage
 ) -> None:
-    current_retry = get_retry_count(msg.headers)
-    logger.info(f"Получен вебхук {event.id}. Текущая попытка (уже сделано ретраев): {current_retry}")
+    payment_id = str(event.id)
+    payload = {"payment_id": payment_id, "status": event.status}
+    headers = {"X-Event-Id": str(event.event_id)}
 
-    if current_retry >= 3:
-        logger.error(f"Превышен лимит ретраев ({current_retry}) для {event.id}. Отправляем в финальный DLQ.")
-        await broker.publish(message=event.as_dict(), exchange=payments_exchange, routing_key="payments.webhooks.dead")
-        await msg.ack()
-        return
-
-    try:
-        logger.info(f"Отправка вебхука для {event.id} на URL {event.webhook_url}")
-
-        payload = {"payment_id": str(event.id), "status": event.status}
+    if event.webhook_url:
         url = event.webhook_url.unicode_string()
-        headers = {"X-Event-Id": str(event.event_id)}
+        for attempt in range(1, settings.MESSAGING.MAX_RETRIES + 1):
+            try:
+                async with http_client.post(url=url, json=payload, headers=headers, timeout=10) as response:
+                    response.raise_for_status()
+                    logger.info("Webhook sent for payment %s (attempt %d)", payment_id, attempt)
+                    await message.ack()
+                    return
+            except Exception as exc:
+                wait = 2**attempt
+                logger.warning(
+                    "Webhook failed for payment %s attempt %d: %s. Retrying in %ds", payment_id, attempt, exc, wait
+                )
+                if attempt < settings.MESSAGING.MAX_RETRIES:
+                    await asyncio.sleep(wait)
 
-        async with http_client.post(url, json=payload, timeout=10, headers=headers) as response:
-            response.raise_for_status()
-            logger.info(f"Вебхук успешно доставлен для {event.id}")
-            await use_case.execute(event.id)
-            await msg.ack()
-
-    except Exception as exc:
-        logger.warning(f"Ошибка при обработке {event.id}: {exc}. Отправляем в ретрай.")
-        await send_to_exponential_retry(event, msg, current_retry, broker)
-
-
-def get_retry_count(headers: dict) -> int:
-    """Определяет номер текущей попытки по истории x-death."""
-    x_death = headers.get("x-death", [])
-    if not x_death:
-        return 0
-
-    for death in x_death:
-        queue_name = death.get("queue")
-        if queue_name == settings.MESSAGING.PAYMENTS.RETRY_POLICY.THIRD.RKEY:
-            return 3
-        if queue_name == settings.MESSAGING.PAYMENTS.RETRY_POLICY.SECOND.RKEY:
-            return 2
-        if queue_name == settings.MESSAGING.PAYMENTS.RETRY_POLICY.FIRST.RKEY:
-            return 1
-    return 0
-
-
-async def send_to_exponential_retry(
-    event: PaymentProcessedEvent, msg: RabbitMessage, current_retry: int, broker: RabbitBroker
-) -> None:
-    routing_keys = {
-        0: settings.MESSAGING.PAYMENTS.RETRY_POLICY.FIRST.RKEY,
-        1: settings.MESSAGING.PAYMENTS.RETRY_POLICY.SECOND.RKEY,
-        2: settings.MESSAGING.PAYMENTS.RETRY_POLICY.THIRD.RKEY,
-    }
-
-    target_routing_key = routing_keys.get(current_retry, settings.MESSAGING.PAYMENTS.TOPICS.WEBHOOKS_DEAD)
-    target_exchange = retry_exchange if current_retry < 3 else payments_exchange
-
-    logger.info(f"Маршрутизация {event.id} в задержку через ключ: {target_routing_key}")
-
-    await broker.publish(
-        message=event.as_dict(),
-        exchange=target_exchange,
-        routing_key=target_routing_key,
-        headers=msg.headers,
-    )
-    await msg.ack()
+    await message.nack(requeue=False)
+    logger.error("Webhook exhausted retries for payment %s", payment_id)

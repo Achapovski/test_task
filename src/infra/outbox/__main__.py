@@ -5,6 +5,7 @@ from faststream._internal.broker import BrokerUsecase
 
 from src.containers import container
 from src.core import settings
+from src.infra.adapters.brokers.topology import setup_rabbit_infrastructure
 from src.infra.outbox.worker import OutboxWorker
 
 logging.basicConfig(level=settings.LOGGING.LEVEL, format=settings.LOGGING.FORMAT)
@@ -17,6 +18,7 @@ async def run_worker():
         broker = await ioc.get(BrokerUsecase)
         try:
             await broker.start()
+            await setup_rabbit_infrastructure(broker)
             while True:
                 await worker.process_message()  # noqa
                 await asyncio.sleep(1)

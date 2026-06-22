@@ -24,10 +24,6 @@ class InfraProvider(Provider):
         return SqlAlchemyPaymentsUnitOfWork(session_maker=session_maker)
 
     @provide(scope=Scope.REQUEST)
-    async def provide_app_uow(self, session_maker: async_sessionmaker) -> ApplicationPaymentUnitOfWork:
-        return SqlAlchemyPaymentsUnitOfWork(session_maker=session_maker)  # type: ignore
-
-    @provide(scope=Scope.REQUEST)
     async def provide_broker(self, settings: Settings) -> BrokerUsecase:
         return RabbitBroker(url=settings.BROKER.dsn.unicode_string())
 

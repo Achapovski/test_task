@@ -5,6 +5,7 @@ from src.app.dto.payments import PaymentCreateRequestDTO, PaymentCreateResponseD
 from src.app.interfaces.units_of_work import ApplicationPaymentUnitOfWork
 from src.core import settings
 from src.domains.payments.domain.entities import PaymentEntity
+from src.domains.payments.exceptions import PaymentAlreadyExistsException
 from src.infra.messaging.events.emitted.events import PaymentCreatedEvent
 from src.infra.outbox.schemes import OutboxMessageScheme
 
@@ -15,13 +16,14 @@ class CreatePaymentUseCase:
 
     async def execute(self, idempotency_key: UUID, payment: PaymentCreateRequestDTO) -> PaymentCreateResponseDTO:
         async with self.uow as uow:
-            entity = await uow.payments.get_by_idempotency_key(idempotency_key)
-
-            if not entity:
-                entity = PaymentEntity.create(idempotency_key=idempotency_key, **payment.as_dict())
+            entity = PaymentEntity.create(idempotency_key=idempotency_key, **payment.as_dict())
+            try:
                 await uow.payments.add(entity)
                 await uow.outbox.add_msgs(self._get_outbox_msg(entity))
                 await uow.commit()
+            except PaymentAlreadyExistsException:
+                await uow.rollback()
+                entity = await uow.payments.get_by_idempotency_key(idempotency_key)
 
         return PaymentCreateResponseDTO(amount=entity.money.amount, currency=entity.money.currency, **entity.as_plain())
 

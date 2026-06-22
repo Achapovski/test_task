@@ -1,5 +1,6 @@
 import os
 from functools import cached_property
+from itertools import chain
 
 from pydantic import AnyUrl, BaseModel, Field, PostgresDsn, SecretStr
 from pydantic import networks as nts
@@ -30,7 +31,7 @@ class DatabaseSettings(BaseSettings, BaseSettingsMixin):
     def dsn(self) -> PostgresDsn:
         return PostgresDsn(
             f"{self.DRIVER}://"
-            f"{self.USER.get_secret_value()}:{self.PASSWORD.get_secret_value()}@{self.HOST}/{self.DATABASE}",
+            f"{self.USER.get_secret_value()}:{self.PASSWORD.get_secret_value()}@{self.HOST}:{self.PORT}/{self.DATABASE}",
         )
 
     model_config = {"env_prefix": "DATABASE_"}
@@ -51,14 +52,15 @@ class BrokerSettings(BaseSettings, BaseSettingsMixin):
             f"{self.HOST}:{self.PORT}"
         )
 
+    # noinspection PyProtectedMember
     @property
     def _broker_dsn(self) -> type[AnyUrl]:
         dsns: tuple[type[AnyUrl], ...] = (nts.AmqpDsn, nts.RedisDsn, nts.KafkaDsn, nts.NatsDsn)  # type: ignore
         for dsn in dsns:
-            if self.PROTOCOL in dsn._constraints.allowed_schemes:  # noqa:
+            if self.PROTOCOL in dsn._constraints.allowed_schemes:
                 return dsn
 
-        allowed_protocols = chain.from_iterable((dsn._constraints.allowed_schemes for dsn in dsns))  # noqa
+        allowed_protocols = chain.from_iterable((dsn._constraints.allowed_schemes for dsn in dsns))  # type: ignore
         raise TypeError(
             f"Unexpected broker protocol. You can use only one of '{list(allowed_protocols)}', got '{self.PROTOCOL}'."
         )
@@ -72,17 +74,6 @@ class ApiSettings(BaseSettings, BaseSettingsMixin):
     model_config = {"env_prefix": "API_"}
 
 
-class RetryLevel(BaseModel):
-    TIME: int
-    RKEY: str
-
-
-class RetryPolicy(BaseModel):
-    FIRST: RetryLevel
-    SECOND: RetryLevel
-    THIRD: RetryLevel
-
-
 class PaymentsTopics(BaseModel):
     NEW: str
     WEBHOOKS: str
@@ -91,11 +82,11 @@ class PaymentsTopics(BaseModel):
 
 class Payments(BaseModel):
     TOPICS: PaymentsTopics
-    RETRY_POLICY: RetryPolicy
 
 
 class MessagingSettings(BaseModel):
     PAYMENTS: Payments
+    MAX_RETRIES: int = Field(default=3)
 
 
 class LoggingSettings(BaseSettings):
